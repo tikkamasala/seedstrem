@@ -15,6 +15,7 @@ import (
 
 	"github.com/kipsilabs/seedstrem/internal/downloader"
 	"github.com/kipsilabs/seedstrem/internal/playsession"
+	"github.com/kipsilabs/seedstrem/internal/rarvol"
 	"github.com/kipsilabs/seedstrem/internal/store"
 	"github.com/kipsilabs/seedstrem/internal/torrents"
 )
@@ -40,6 +41,7 @@ type Handler struct {
 	sessions *playsession.Sessions
 	settings func() Settings
 	prio     *prioritizer
+	window   *volumeWindow
 	logger   *slog.Logger
 }
 
@@ -48,7 +50,14 @@ func NewHandler(st *store.Store, dc downloader.Client, svc *torrents.Service, re
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{store: st, dc: dc, svc: svc, resolver: resolver, avail: avail, sessions: sessions, settings: settings, prio: newPrioritizer(dc, logger), logger: logger}
+	window := newVolumeWindow(dc, logger, func(ctx context.Context, hash string) {
+		if svc != nil {
+			if err := svc.EnsureStreamingPrio(ctx, hash); err != nil {
+				logger.Debug("stream: rar window: re-assert streaming priorities", "hash", hash, "error", err)
+			}
+		}
+	})
+	return &Handler{store: st, dc: dc, svc: svc, resolver: resolver, avail: avail, sessions: sessions, settings: settings, prio: newPrioritizer(dc, logger), window: window, logger: logger}
 }
 
 // Router returns the router to mount at /dl.
@@ -123,6 +132,13 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if !found {
 		http.NotFound(w, r)
+		return
+	}
+
+	// A scene release: the video is stored inside a RAR set, served
+	// through the set's first volume.
+	if set, ok := rarvol.SetStartingAt(files, file.Index); ok {
+		servedPlaceholder = h.serveRar(w, r, tor, files, set, settings)
 		return
 	}
 

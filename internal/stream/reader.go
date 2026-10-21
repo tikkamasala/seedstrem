@@ -20,6 +20,7 @@ type partialReader struct {
 	reopen func() (*os.File, error) // re-resolve path (file moves on completion)
 
 	size       int64 // final size of the file
+	base       int64 // where the file's bytes start on disk (a RAR volume's data block)
 	offset     int64
 	delivered  int64 // total bytes read out (offset moves on Seek, this doesn't)
 	fileOffset int64 // absolute offset of this file in torrent piece space
@@ -77,14 +78,14 @@ func (pr *partialReader) Read(p []byte) (int, error) {
 		}
 	}
 
-	read, err := pr.file.ReadAt(p[:n], pr.offset)
+	read, err := pr.file.ReadAt(p[:n], pr.base+pr.offset)
 	if err != nil && shouldReopen(err) && pr.reopen != nil {
 		// qBittorrent may rename/move the file when it completes (
 		// strip or temp-dir move). Reopen at the new location and retry.
 		if f, openErr := pr.reopen(); openErr == nil {
 			pr.file.Close()
 			pr.file = f
-			read, err = pr.file.ReadAt(p[:n], pr.offset)
+			read, err = pr.file.ReadAt(p[:n], pr.base+pr.offset)
 		}
 	}
 	pr.offset += int64(read)
