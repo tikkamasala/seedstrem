@@ -157,4 +157,19 @@ func TestIsNotFound(t *testing.T) {
 	if isNotFound(errors.New("plain")) {
 		t.Error("non-RPC errors must not map to not-found")
 	}
+	// Unknown id whose swallowed KeyError escaped because printing the
+	// traceback failed on a broken daemon stdout.
+	eio := delugerpc.RPCError{
+		ExceptionType:    "WrappedException",
+		ExceptionMessage: "[Errno 5] Input/output error",
+		TraceBack: "  File \"/usr/lib/python3.14/site-packages/deluge/core/torrentmanager.py\", line 307, in __getitem__\n" +
+			"    return self.torrents[torrent_id]\nKeyError: '4826410d'\n\nDuring handling of the above exception, another exception occurred:\n" +
+			"OSError: [Errno 5] Input/output error\n",
+	}
+	if !isNotFound(eio) {
+		t.Error("torrent manager KeyError behind an OSError must map to not-found")
+	}
+	if isNotFound(delugerpc.RPCError{ExceptionType: "WrappedException", TraceBack: "OSError: [Errno 5] Input/output error"}) {
+		t.Error("a bare I/O error must not map to not-found")
+	}
 }

@@ -145,11 +145,20 @@ func convertPieces(pieces []int) []downloader.PieceState {
 
 // isNotFound reports whether err is Deluge signalling an unknown torrent
 // id (an InvalidTorrentError raised across RPC).
+//
+// It also covers get_torrent_status on an unknown id. Deluge normally
+// swallows that KeyError (printing its traceback) and returns an empty
+// dict, but when the daemon's stdout is broken — a closed terminal, a
+// gone log pipe — the print itself raises OSError, which escapes as a
+// WrappedException whose traceback still carries the original KeyError
+// from the torrent manager lookup.
 func isNotFound(err error) bool {
 	var rpcErr delugerpc.RPCError
 	if !errors.As(err, &rpcErr) {
 		return false
 	}
 	return strings.Contains(rpcErr.ExceptionType, "InvalidTorrentError") ||
-		strings.Contains(rpcErr.ExceptionMessage, "InvalidTorrentError")
+		strings.Contains(rpcErr.ExceptionMessage, "InvalidTorrentError") ||
+		(strings.Contains(rpcErr.TraceBack, "torrentmanager.py") &&
+			strings.Contains(rpcErr.TraceBack, "KeyError:"))
 }

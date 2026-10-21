@@ -484,3 +484,65 @@ func TestSelectAndLinkSeedFullBoostsBelowTop(t *testing.T) {
 		t.Errorf("other files priority call = %q, want priority=1", others)
 	}
 }
+
+// A stored torrent the download client no longer has (removed
+// out-of-band, data lost) must not be reused: play would wait on metadata
+// that never arrives. EnsureAdded re-adds it under a fresh row that keeps
+// the content identity and indexer, and drops the stale links.
+func TestEnsureAddedReaddsVanishedTorrent(t *testing.T) {
+	svc, fakeDC, db := newService(t)
+	ctx := context.Background()
+
+	sel := Selector{Source: "tt", ContentRef: "tt0944947", IsSeries: true, Season: 1, Episode: 5, Indexer: "ix1"}
+	old, err := svc.EnsureAdded(ctx, testMagnet("Show.S01"), nil, sel)
+	if err != nil {
+		t.Fatalf("first add: %v", err)
+	}
+	fakeDC.Remove(testHash)
+	if err := db.SetTorrentError(ctx, old.ID, "removed from qBittorrent"); err != nil {
+		t.Fatalf("set error: %v", err)
+	}
+
+	// Re-play carrying no identity (e.g. an older stream URL).
+	tor, err := svc.EnsureAdded(ctx, testMagnet("Show.S01"), nil, Selector{})
+	if err != nil {
+		t.Fatalf("re-add: %v", err)
+	}
+	if tor.ID == old.ID {
+		t.Error("stale row reused, want a fresh one")
+	}
+	if tor.Error != "" {
+		t.Errorf("fresh row error = %q, want none", tor.Error)
+	}
+	if tor.ContentRef != "tt0944947" || tor.Season != 1 || tor.Episode != 5 || tor.Indexer != "ix1" {
+		t.Errorf("identity not carried over: %+v", tor)
+	}
+	if fakeDC.Get(testHash) == nil {
+		t.Error("torrent not re-added to the download client")
+	}
+	if _, err := db.TorrentByHash(ctx, testHash); err != nil {
+		t.Errorf("torrent by hash: %v", err)
+	}
+}
+
+// Torrents flagged as gone from the download client are not offered as
+// owned or already-downloaded streams.
+func TestErroredTorrentsNotOffered(t *testing.T) {
+	svc, _, db := newService(t)
+	ctx := context.Background()
+
+	sel := Selector{Source: "tt", ContentRef: "tt0944947", IsSeries: true, Season: 1, Episode: 5}
+	tor, err := svc.EnsureAdded(ctx, testMagnet("Show.S01"), nil, sel)
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if err := db.SetTorrentError(ctx, tor.ID, "removed from qBittorrent"); err != nil {
+		t.Fatalf("set error: %v", err)
+	}
+	if owned := svc.OwnedForContent(ctx, "tt", "tt0944947", 1, 5); len(owned) != 0 {
+		t.Errorf("OwnedForContent = %+v, want none", owned)
+	}
+	if stored := svc.StoredByHashes(ctx, []string{testHash}); len(stored) != 0 {
+		t.Errorf("StoredByHashes = %+v, want none", stored)
+	}
+}

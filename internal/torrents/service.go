@@ -99,7 +99,27 @@ func (s *Service) EnsureAdded(ctx context.Context, magnet string, torrentFile []
 		return store.Torrent{}, fmt.Errorf("parse magnet: %w", err)
 	}
 
-	if existing, err := s.store.TorrentByHash(ctx, hash); err == nil {
+	existing, err := s.store.TorrentByHash(ctx, hash)
+	if err == nil && s.vanished(ctx, existing) {
+		// The row outlived its torrent (removed from the download client
+		// out-of-band, or lost with its data): reusing it would wait for
+		// metadata that never comes. Drop it — its links cascade — and add
+		// the torrent afresh, keeping what the row knew about it.
+		s.logger.Info("torrents: stored torrent missing from download client, re-adding",
+			"hash", hash, "id", existing.ID, "error", existing.Error)
+		if err := s.store.DeleteTorrent(ctx, existing.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
+			return store.Torrent{}, fmt.Errorf("drop stale torrent: %w", err)
+		}
+		if sel.ContentRef == "" {
+			sel.Source, sel.ContentRef = existing.ContentSource, existing.ContentRef
+			sel.Season, sel.Episode = existing.Season, existing.Episode
+		}
+		if sel.Indexer == "" {
+			sel.Indexer = existing.Indexer
+		}
+		err = store.ErrNotFound
+	}
+	if err == nil {
 		s.logger.Debug("torrents: reusing existing torrent", "hash", hash, "id", existing.ID)
 		// Backfill the content identity if this torrent was first added
 		// before we knew it (older row, or a re-add carrying it now).
@@ -170,6 +190,19 @@ func (s *Service) EnsureAdded(ctx context.Context, magnet string, torrentFile []
 		return store.Torrent{}, fmt.Errorf("persist torrent: %w", err)
 	}
 	return tor, nil
+}
+
+// vanished reports whether a stored torrent is gone from the download
+// client. A definite not-found answer settles it; a row the syncer already
+// flagged as removed also counts when the client cannot confirm it is
+// back. Any other lookup failure keeps the row, so a flaky client is not
+// mistaken for a missing torrent.
+func (s *Service) vanished(ctx context.Context, tor store.Torrent) bool {
+	_, err := s.dc.Torrent(ctx, tor.Hash)
+	if errors.Is(err, downloader.ErrTorrentNotFound) {
+		return true
+	}
+	return tor.Error != "" && err != nil
 }
 
 // WaitForMetadata polls qBittorrent until it has resolved the torrent's file
@@ -446,7 +479,20 @@ func (s *Service) OwnedForContent(ctx context.Context, source, ref string, seaso
 		s.logger.Warn("torrents: owned-for-content lookup", "source", source, "ref", ref, "error", err)
 		return nil
 	}
-	return owned
+	return playable(owned)
+}
+
+// playable drops torrents the syncer flagged as gone from the download
+// client: offering one as owned would promise instant playback of content
+// that no longer exists.
+func playable(tors []store.Torrent) []store.Torrent {
+	out := tors[:0]
+	for _, t := range tors {
+		if t.Error == "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // StoredByHashes returns the torrents already in the local store whose
@@ -464,6 +510,11 @@ func (s *Service) StoredByHashes(ctx context.Context, hashes []string) map[strin
 	if err != nil {
 		s.logger.Warn("torrents: stored-by-hashes lookup", "error", err)
 		return map[string]store.Torrent{}
+	}
+	for h, t := range stored {
+		if t.Error != "" {
+			delete(stored, h)
+		}
 	}
 	return stored
 }
