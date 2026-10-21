@@ -28,3 +28,6 @@ __pycache__/
 
 # Superpowers brainstorm scratch
 .superpowers/
+
+contrib/
+downloads/

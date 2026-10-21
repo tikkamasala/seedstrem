@@ -63,7 +63,7 @@ services:
       # or in the seedstrem web UI (Settings → Prowlarr).
       - SEEDSTREM_PROWLARR_API_KEY=
       # The address Stremio will reach seedstrem at:
-      - SEEDSTREM_SERVER_EXTERNAL_URL=http://192.168.1.10:8081
+      - SEEDSTREM_SERVER_EXTERNAL_URL=http://192.168.1.37:8081
     volumes:
       - ./seedstrem-config:/config
       - ./downloads:/data     # SAME host dir as qBittorrent's /downloads
@@ -71,6 +71,12 @@ services:
       # qBittorrent already publishes 8080 on the host, so map seedstrem to
       # 8081 externally (it still listens on 8080 inside the container).
       - "8081:8080"
+    extra_hosts:
+      # Lets seedstrem reach services on the Docker host (e.g. a qBittorrent
+      # or Prowlarr not running in this compose file) via
+      # http://host.docker.internal:<port>. Needed on Linux; built in on
+      # Docker Desktop.
+      - "host.docker.internal:host-gateway"
     depends_on:
       - qbittorrent
       - prowlarr
