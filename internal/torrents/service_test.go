@@ -546,3 +546,46 @@ func TestErroredTorrentsNotOffered(t *testing.T) {
 		t.Errorf("StoredByHashes = %+v, want none", stored)
 	}
 }
+
+// With the next-episodes cap, a season pack downloads only the played
+// episode (boosted) and the following N episodes, skipping the rest even
+// in full-seed mode.
+func TestSelectAndLinkNextEpisodesCap(t *testing.T) {
+	fakeDC := fake.New()
+	db, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	svc := New(db, fakeDC, func() Settings {
+		return Settings{MetadataTimeout: 2 * time.Second, SeedFull: true, NextEpisodes: 2}
+	}, nil)
+
+	fakeDC.Put(&fake.Torrent{
+		Hash:  testHash,
+		State: downloader.StatePaused,
+		Files: []fake.File{
+			{Name: "Show.S01E01.1080p.mkv", Size: 500 << 20},
+			{Name: "Show.S01E02.1080p.mkv", Size: 500 << 20},
+			{Name: "Show.S01E03.1080p.mkv", Size: 500 << 20},
+			{Name: "Show.S01E04.1080p.mkv", Size: 500 << 20},
+			{Name: "Show.S01E05.1080p.mkv", Size: 500 << 20},
+			{Name: "Show.S01.nfo", Size: 4 << 10},
+		},
+	})
+	sel := Selector{IsSeries: true, Season: 1, Episode: 2}
+	if _, err := svc.Resolve(context.Background(), testMagnet("Show"), nil, sel); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	files, err := fakeDC.Files(context.Background(), testHash)
+	if err != nil {
+		t.Fatalf("files: %v", err)
+	}
+	want := []int{0, 6, 1, 1, 0, 0}
+	for i, f := range files {
+		if f.Priority != want[i] {
+			t.Errorf("%s priority = %d, want %d", f.Name, f.Priority, want[i])
+		}
+	}
+}

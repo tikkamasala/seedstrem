@@ -95,6 +95,7 @@ func run() error {
 			MetadataTimeout:     c.Meta.MetadataTimeout,
 			DeleteFilesOnRemove: c.Storage.DeleteFilesOnRemove,
 			SeedFull:            c.Seeding.Full,
+			NextEpisodes:        c.Seeding.NextEpisodes,
 		}
 	}, logger)
 

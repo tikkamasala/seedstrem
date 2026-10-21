@@ -161,6 +161,10 @@ seeding:
   # trackers. Set false to download only the played file (less disk, but
   # you seed only that file).
   full: true
+  # For series, download only the played episode plus this many following
+  # episodes of a multi-episode torrent (e.g. a season pack); the rest is
+  # skipped, even with full: true. 0 = no limit.
+  next_episodes: 0
 
 rss:
   # Background grabber: periodically pull the just-released items from your

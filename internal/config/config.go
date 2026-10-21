@@ -266,6 +266,10 @@ type Seeding struct {
 	// first; the rest downloads afterwards. When false, only the played
 	// file is downloaded (minimal disk, but you seed only that file).
 	Full bool `yaml:"full"`
+	// NextEpisodes limits a series torrent (e.g. a season pack) to the
+	// played episode plus this many following episodes; the rest of the
+	// torrent is skipped, even when Full is set. 0 disables the limit.
+	NextEpisodes int `yaml:"next_episodes"`
 }
 
 // RSS configures the background grabber that periodically pulls
@@ -508,6 +512,11 @@ func applyEnv(cfg *Config, getenv func(string) string) {
 	setBool("ADDON_ENABLE_ANIME", &cfg.Addon.EnableAnime)
 	setBool("DOWNLOADER_ADOPT_LABELLED", &cfg.Downloader.AdoptLabelled)
 	setBool("SEEDING_FULL", &cfg.Seeding.Full)
+	if v := getenv("SEEDSTREM_SEEDING_NEXT_EPISODES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Seeding.NextEpisodes = n
+		}
+	}
 	setBool("RSS_ENABLED", &cfg.RSS.Enabled)
 	setBool("RSS_FREELEECH_ONLY", &cfg.RSS.FreeleechOnly)
 	if v := getenv("SEEDSTREM_RSS_INTERVAL"); v != "" {
@@ -733,6 +742,9 @@ func (c Config) Validate() error {
 	}
 	if c.RSS.Filters.MaxSizeMB != 0 && c.RSS.Filters.MaxSizeMB < c.RSS.Filters.MinSizeMB {
 		errs = append(errs, errors.New("rss.filters.max_size_mb must be >= min_size_mb (or 0 for unbounded)"))
+	}
+	if c.Seeding.NextEpisodes < 0 {
+		errs = append(errs, errors.New("seeding.next_episodes must not be negative (0 disables the limit)"))
 	}
 	if c.RSS.MaxGrabsPerCycle < 0 {
 		errs = append(errs, errors.New("rss.max_grabs_per_cycle must not be negative (0 disables grabbing)"))

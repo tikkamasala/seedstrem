@@ -115,7 +115,7 @@ export interface Config {
     delete_policy: string;
     indexer_seed_times: IndexerSeedTime[];
   };
-  seeding: { full: boolean };
+  seeding: { full: boolean; next_episodes: number };
   rss: {
     enabled: boolean;
     interval_minutes: number;

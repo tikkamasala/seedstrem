@@ -9,6 +9,13 @@ export function Seeding({ config, update }: SectionProps) {
         checked={config.seeding.full}
         onChange={(v) => update((c) => (c.seeding.full = v))}
       />
+      <NumberField
+        label="Episodes to download after the played one (0 = no limit)"
+        min={0}
+        value={config.seeding.next_episodes}
+        onChange={(v) => update((c) => (c.seeding.next_episodes = v))}
+        hint="For season packs: only the played episode and this many following ones download; the rest of the pack is skipped, even with the whole-torrent option on."
+      />
       <div className="grid gap-4 sm:grid-cols-2">
         <NumberField
           label="Seed time before removal (hours, 0 = never)"

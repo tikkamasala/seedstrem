@@ -183,7 +183,8 @@ type configDTO struct {
 		IndexerSeedTimes            []indexerSeedTime `json:"indexer_seed_times"`
 	} `json:"cleanup"`
 	Seeding struct {
-		Full bool `json:"full"`
+		Full         bool `json:"full"`
+		NextEpisodes int  `json:"next_episodes"`
 	} `json:"seeding"`
 	RSS struct {
 		Enabled                bool `json:"enabled"`
@@ -262,6 +263,7 @@ func toDTO(cfg config.Config) configDTO {
 	dto.Cleanup.DeletePolicy = cfg.Cleanup.DeletePolicy
 	dto.Cleanup.IndexerSeedTimes = indexerSeedTimesToDTO(cfg.Cleanup.IndexerSeedTimes)
 	dto.Seeding.Full = cfg.Seeding.Full
+	dto.Seeding.NextEpisodes = cfg.Seeding.NextEpisodes
 	dto.RSS.Enabled = cfg.RSS.Enabled
 	dto.RSS.IntervalMinutes = int(cfg.RSS.Interval / time.Minute)
 	dto.RSS.MaxGrabsPerCycle = cfg.RSS.MaxGrabsPerCycle
@@ -430,6 +432,8 @@ func (dto configDTO) apply(cfg config.Config) config.Config {
 		cfg.Cleanup.IndexerSeedTimes = indexerSeedTimesFromDTO(dto.Cleanup.IndexerSeedTimes)
 	}
 	cfg.Seeding.Full = dto.Seeding.Full
+	// 0 is meaningful (no limit), so always apply.
+	cfg.Seeding.NextEpisodes = dto.Seeding.NextEpisodes
 	cfg.RSS.Enabled = dto.RSS.Enabled
 	// Interval is only meaningful when positive; 0 keeps the stored value so
 	// a client clearing the field can't produce an invalid (<=0) interval.

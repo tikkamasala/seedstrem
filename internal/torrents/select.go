@@ -99,6 +99,20 @@ func matchEpisode(name string, season, episode int) bool {
 	return false
 }
 
+// isNextEpisode reports whether name is a video of one of the n episodes
+// following sel's (same season).
+func isNextEpisode(name string, sel Selector, n int) bool {
+	if !IsVideo(name) || isSample(name) {
+		return false
+	}
+	for e := sel.Episode + 1; e <= sel.Episode+n; e++ {
+		if matchEpisode(name, sel.Season, e) {
+			return true
+		}
+	}
+	return false
+}
+
 // PickFile returns the index of the file to stream for sel, or an error
 // when nothing suitable is found.
 func PickFile(files []downloader.FileInfo, sel Selector) (int, error) {

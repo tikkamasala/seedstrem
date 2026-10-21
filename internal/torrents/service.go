@@ -27,6 +27,10 @@ type Settings struct {
 	// rest at normal priority afterwards) so a complete copy is available
 	// to seed. When false, only the played file is downloaded.
 	SeedFull bool
+	// NextEpisodes caps a series torrent (e.g. a season pack) to the played
+	// episode plus this many following ones; every other file is skipped,
+	// overriding SeedFull. 0 disables the cap.
+	NextEpisodes int
 }
 
 // Service owns the add → wait → select → link mechanics against qBittorrent
@@ -237,8 +241,9 @@ var ErrMetadataTimeout = errors.New("timed out waiting for torrent metadata")
 
 // SelectAndLink marks fileIndex as wanted (others unwanted), starts the
 // torrent, and mints a streaming link for that file. It is idempotent on
-// (torrentID, fileIndex): a repeat call returns the existing link.
-func (s *Service) SelectAndLink(ctx context.Context, tor store.Torrent, fileIndex int, files []downloader.FileInfo) (store.Link, error) {
+// (torrentID, fileIndex): a repeat call returns the existing link. sel is
+// the episode being played, used to apply the next-episodes cap.
+func (s *Service) SelectAndLink(ctx context.Context, tor store.Torrent, fileIndex int, files []downloader.FileInfo, sel Selector) (store.Link, error) {
 	if existing, err := s.linkFor(ctx, tor.ID, fileIndex); err == nil {
 		// Repeat play of an already-linked file: the first/last-piece
 		// boost may have been dropped since the first select (qBittorrent
@@ -250,11 +255,16 @@ func (s *Service) SelectAndLink(ctx context.Context, tor store.Torrent, fileInde
 		return store.Link{}, err
 	}
 
-	var selectedIdx, unselectedIdx []int
+	settings := s.settings()
+	capNext := settings.NextEpisodes > 0 && sel.IsSeries && sel.Episode > 0
+	var selectedIdx, nextIdx, unselectedIdx []int
 	for _, f := range files {
-		if f.Index == fileIndex {
+		switch {
+		case f.Index == fileIndex:
 			selectedIdx = append(selectedIdx, f.Index)
-		} else {
+		case capNext && isNextEpisode(f.Name, sel, settings.NextEpisodes):
+			nextIdx = append(nextIdx, f.Index)
+		default:
 			unselectedIdx = append(unselectedIdx, f.Index)
 		}
 	}
@@ -274,12 +284,22 @@ func (s *Service) SelectAndLink(ctx context.Context, tor store.Torrent, fileInde
 	// the first/last-piece boost is itself priority 7. A whole file at 7
 	// therefore downloads in random order with no head/tail preference,
 	// and the playability gate never opens until the download is done.
+	//
+	// With the next-episodes cap, the following episodes download at
+	// normal after the boosted played file and everything else is skipped,
+	// even in full-seed mode, so a season pack isn't fetched whole.
 	otherPrio, selectedPrio := 0, 1
-	if s.settings().SeedFull {
+	if settings.SeedFull {
 		otherPrio, selectedPrio = 1, 6
+	}
+	if capNext {
+		otherPrio, selectedPrio = 0, 6
 	}
 	if err := s.dc.SetFilePriority(ctx, tor.Hash, unselectedIdx, otherPrio); err != nil {
 		return store.Link{}, fmt.Errorf("set other files priority: %w", err)
+	}
+	if err := s.dc.SetFilePriority(ctx, tor.Hash, nextIdx, 1); err != nil {
+		return store.Link{}, fmt.Errorf("set next episodes priority: %w", err)
 	}
 	if err := s.dc.SetFilePriority(ctx, tor.Hash, selectedIdx, selectedPrio); err != nil {
 		return store.Link{}, fmt.Errorf("select file: %w", err)
@@ -572,5 +592,5 @@ func (s *Service) Resolve(ctx context.Context, magnet string, torrentFile []byte
 	if err != nil {
 		return store.Link{}, err
 	}
-	return s.SelectAndLink(ctx, tor, idx, files)
+	return s.SelectAndLink(ctx, tor, idx, files, sel)
 }
