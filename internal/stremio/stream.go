@@ -323,6 +323,14 @@ func (h *Handler) ttSearch(ctx context.Context, q meta.Query, s Settings) ([]pro
 				h.logger.Warn("stremio: prowlarr text-fallback search failed", "query", textQuery, "error", err)
 				return
 			}
+			if q.IsSeries() {
+				// Free text matches loosely — a short title brings back
+				// other shows' episodes — so keep only this show's.
+				raw := len(r)
+				r = filterBySeriesTitle(r, title)
+				h.logger.Debug("stremio: text-fallback title filter",
+					"title", title, "raw", raw, "kept", len(r))
+			}
 			textRes = r
 		})
 	}
