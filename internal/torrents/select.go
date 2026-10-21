@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/kipsilabs/seedstrem/internal/downloader"
+	"github.com/kipsilabs/seedstrem/internal/rarvol"
 )
 
 // ErrNoFileMatch is returned when no file in a torrent matches the selector.
@@ -99,10 +100,11 @@ func matchEpisode(name string, season, episode int) bool {
 	return false
 }
 
-// isNextEpisode reports whether name is a video of one of the n episodes
-// following sel's (same season).
+// isNextEpisode reports whether name is a video, or a RAR volume, of one
+// of the n episodes following sel's (same season).
 func isNextEpisode(name string, sel Selector, n int) bool {
-	if !IsVideo(name) || isSample(name) {
+	_, _, isVolume := rarvol.VolumeNumber(name)
+	if (!IsVideo(name) && !isVolume) || isSample(name) {
 		return false
 	}
 	for e := sel.Episode + 1; e <= sel.Episode+n; e++ {
@@ -114,7 +116,9 @@ func isNextEpisode(name string, sel Selector, n int) bool {
 }
 
 // PickFile returns the index of the file to stream for sel, or an error
-// when nothing suitable is found.
+// when nothing suitable is found. A torrent with no matching video falls
+// back to its largest matching RAR volume set (scene releases), picked by
+// the index of the set's first volume.
 func PickFile(files []downloader.FileInfo, sel Selector) (int, error) {
 	best := -1
 	var bestSize int64 = -1
@@ -128,6 +132,21 @@ func PickFile(files []downloader.FileInfo, sel Selector) (int, error) {
 		if f.Size > bestSize {
 			best = f.Index
 			bestSize = f.Size
+		}
+	}
+	if best >= 0 {
+		return best, nil
+	}
+	for _, set := range rarvol.Sets(files) {
+		if isSample(set.Stem) {
+			continue
+		}
+		if sel.IsSeries && !matchEpisode(set.Stem, sel.Season, sel.Episode) {
+			continue
+		}
+		if set.TotalSize > bestSize {
+			best = set.First().Index
+			bestSize = set.TotalSize
 		}
 	}
 	if best >= 0 {

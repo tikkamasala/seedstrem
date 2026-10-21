@@ -485,6 +485,47 @@ func TestSelectAndLinkSeedFullBoostsBelowTop(t *testing.T) {
 	}
 }
 
+// A RAR set streams through its first volume, which torrents list after
+// .r00…: only that volume starts wanted, so sequential download fetches
+// it first. The stream handler's volume window wants the rest in volume
+// order — even in full-seed mode, where other files stay wanted.
+func TestSelectAndLinkRarSetWantsOnlyFirstVolume(t *testing.T) {
+	fakeDC := fake.New()
+	db, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	svc := New(db, fakeDC, func() Settings {
+		return Settings{MetadataTimeout: 2 * time.Second, SeedFull: true}
+	}, nil)
+
+	fakeDC.Put(&fake.Torrent{
+		Hash:  testHash,
+		State: downloader.StatePaused,
+		Files: []fake.File{
+			{Name: "Rel/rel.nfo", Size: 4 << 10},
+			{Name: "Rel/rel.r00", Size: 50 << 20},
+			{Name: "Rel/rel.r01", Size: 20 << 20},
+			{Name: "Rel/rel.rar", Size: 50 << 20},
+		},
+	})
+	link, err := svc.Resolve(context.Background(), testMagnet("Rel"), nil, Selector{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if link.FileIndex != 3 {
+		t.Fatalf("linked file %d, want the .rar first volume (3)", link.FileIndex)
+	}
+	tor := fakeDC.Get(testHash)
+	want := []int{1, 0, 0, 6}
+	for i, f := range tor.Files {
+		if f.Priority != want[i] {
+			t.Errorf("%s priority = %d, want %d", f.Name, f.Priority, want[i])
+		}
+	}
+}
+
 // A stored torrent the download client no longer has (removed
 // out-of-band, data lost) must not be reused: play would wait on metadata
 // that never arrives. EnsureAdded re-adds it under a fresh row that keeps

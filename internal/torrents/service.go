@@ -11,6 +11,7 @@ import (
 
 	"github.com/kipsilabs/seedstrem/internal/downloader"
 	"github.com/kipsilabs/seedstrem/internal/metainfo"
+	"github.com/kipsilabs/seedstrem/internal/rarvol"
 	"github.com/kipsilabs/seedstrem/internal/store"
 )
 
@@ -257,11 +258,23 @@ func (s *Service) SelectAndLink(ctx context.Context, tor store.Torrent, fileInde
 
 	settings := s.settings()
 	capNext := settings.NextEpisodes > 0 && sel.IsSeries && sel.Episode > 0
-	var selectedIdx, nextIdx, unselectedIdx []int
+	// A RAR set streams through its first volume. Its other volumes start
+	// unwanted: the stream handler's volume window wants them in volume
+	// order as playback reaches them, which sequential download alone
+	// can't do — torrents list .r00… ahead of the .rar first volume.
+	rarSet := map[int]bool{}
+	if set, ok := rarvol.SetStartingAt(files, fileIndex); ok {
+		for _, f := range set.Files[1:] {
+			rarSet[f.Index] = true
+		}
+	}
+	var selectedIdx, nextIdx, unselectedIdx, volumeIdx []int
 	for _, f := range files {
 		switch {
 		case f.Index == fileIndex:
 			selectedIdx = append(selectedIdx, f.Index)
+		case rarSet[f.Index]:
+			volumeIdx = append(volumeIdx, f.Index)
 		case capNext && isNextEpisode(f.Name, sel, settings.NextEpisodes):
 			nextIdx = append(nextIdx, f.Index)
 		default:
@@ -297,6 +310,9 @@ func (s *Service) SelectAndLink(ctx context.Context, tor store.Torrent, fileInde
 	}
 	if err := s.dc.SetFilePriority(ctx, tor.Hash, unselectedIdx, otherPrio); err != nil {
 		return store.Link{}, fmt.Errorf("set other files priority: %w", err)
+	}
+	if err := s.dc.SetFilePriority(ctx, tor.Hash, volumeIdx, 0); err != nil {
+		return store.Link{}, fmt.Errorf("set rar volumes priority: %w", err)
 	}
 	if err := s.dc.SetFilePriority(ctx, tor.Hash, nextIdx, 1); err != nil {
 		return store.Link{}, fmt.Errorf("set next episodes priority: %w", err)

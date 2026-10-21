@@ -82,6 +82,51 @@ func TestPickFile(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "scene rar set picks first volume",
+			files: []downloader.FileInfo{
+				f(0, "Movie.2020-GRP/movie.2020-grp.nfo", 1), f(1, "Movie.2020-GRP/movie.2020-grp.r00", 50*mb),
+				f(2, "Movie.2020-GRP/movie.2020-grp.r01", 20*mb), f(3, "Movie.2020-GRP/movie.2020-grp.rar", 50*mb),
+				f(4, "Movie.2020-GRP/movie.2020-grp.sfv", 1),
+			},
+			sel:  Selector{IsSeries: false},
+			want: 3,
+		},
+		{
+			name: "rar set skips sample and subs sets",
+			files: []downloader.FileInfo{
+				f(0, "Rel/Sample/rel-sample.rar", 900*mb),
+				f(1, "Rel/Subs/rel.subs.rar", 1*mb),
+				f(2, "Rel/rel.r00", 50*mb), f(3, "Rel/rel.rar", 50*mb),
+			},
+			sel:  Selector{IsSeries: false},
+			want: 3,
+		},
+		{
+			name: "video beats rar set",
+			files: []downloader.FileInfo{
+				f(0, "Rel/rel.r00", 900*mb), f(1, "Rel/rel.rar", 900*mb), f(2, "Rel/rel.mkv", 10*mb),
+			},
+			sel:  Selector{IsSeries: false},
+			want: 2,
+		},
+		{
+			name: "rar season pack matches episode",
+			files: []downloader.FileInfo{
+				f(0, "Show.S01.720p-GRP/Show.S01E04.720p-GRP/show.s01e04.720p-grp.r00", 50*mb),
+				f(1, "Show.S01.720p-GRP/Show.S01E04.720p-GRP/show.s01e04.720p-grp.rar", 50*mb),
+				f(2, "Show.S01.720p-GRP/Show.S01E05.720p-GRP/show.s01e05.720p-grp.part1.rar", 50*mb),
+				f(3, "Show.S01.720p-GRP/Show.S01E05.720p-GRP/show.s01e05.720p-grp.part2.rar", 10*mb),
+			},
+			sel:  Selector{IsSeries: true, Season: 1, Episode: 5},
+			want: 2,
+		},
+		{
+			name:    "rar set with missing volume errors",
+			files:   []downloader.FileInfo{f(0, "Rel/rel.r01", 50*mb), f(1, "Rel/rel.rar", 50*mb)},
+			sel:     Selector{IsSeries: false},
+			wantErr: true,
+		},
+		{
 			name:  "season pack picks right episode largest",
 			files: []downloader.FileInfo{f(0, "S01E05.mkv", 400*mb), f(1, "S01E05.PROPER.mkv", 450*mb), f(2, "S01E06.mkv", 800*mb)},
 			sel:   Selector{IsSeries: true, Season: 1, Episode: 5},
@@ -104,5 +149,20 @@ func TestPickFile(t *testing.T) {
 				t.Errorf("PickFile = %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIsNextEpisodeAcceptsRarVolumes(t *testing.T) {
+	sel := Selector{IsSeries: true, Season: 1, Episode: 4}
+	for name, want := range map[string]bool{
+		"Show.S01E05-GRP/show.s01e05-grp.rar":        true,
+		"Show.S01E05-GRP/show.s01e05-grp.r07":        true,
+		"Show.S01E05-GRP/show.s01e05-grp.nfo":        false,
+		"Show.S01E05-GRP/Sample/show.s01e05-grp.rar": false,
+		"Show.S01E07-GRP/show.s01e07-grp.rar":        false,
+	} {
+		if got := isNextEpisode(name, sel, 2); got != want {
+			t.Errorf("isNextEpisode(%q) = %v, want %v", name, got, want)
+		}
 	}
 }
