@@ -1020,3 +1020,68 @@ func TestPlayFetchesDeferredTorrent(t *testing.T) {
 		t.Errorf("stored magnet lacks the fetched tracker: %q", tor.Magnet)
 	}
 }
+
+// TestPlayDeferredHashlessRelease asserts that a magnet-less, hash-less
+// release gets a play URL keyed by its download link (no magnet, no API
+// key leaked), and that playing it fetches the .torrent, adds it directly
+// and redirects to the stream.
+func TestPlayDeferredHashlessRelease(t *testing.T) {
+	h := newHarness(t)
+
+	const tracker = "http://tr.example/announce"
+	raw := []byte("d8:announce26:" + tracker + "4:infod4:name4:testee")
+	hash, _, _, err := metainfo.FromTorrent(raw)
+	if err != nil {
+		t.Fatalf("fixture torrent: %v", err)
+	}
+	torrentSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(raw)
+	}))
+	defer torrentSrv.Close()
+	h.fakeDC.Put(&fake.Torrent{
+		Hash: hash, State: "Paused",
+		Files: []fake.File{{Name: "test.mkv", Size: 1 << 20}},
+	})
+
+	res := prowlarr.Result{Title: "test", DownloadURL: torrentSrv.URL + "/file.torrent?apikey=secret", Indexer: "TorrentLeech"}
+	key := playKey(res)
+	h.handler.downloadURLs.put(key, []byte(res.DownloadURL))
+	item := h.handler.toStreamItem(h.server.URL, meta.Query{Source: "tt", ID: "tt1375666"}, res, 0)
+	if !strings.Contains(item.URL, "/stremio/play/"+key+"?") || !strings.Contains(item.URL, "deferred=1") {
+		t.Errorf("deferred play URL = %q", item.URL)
+	}
+	if strings.Contains(item.URL, "secret") || strings.Contains(item.URL, "magnet=") {
+		t.Errorf("play URL leaks the download link or carries a magnet: %q", item.URL)
+	}
+
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := client.Get(item.URL)
+	if err != nil {
+		t.Fatalf("play: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", resp.StatusCode)
+	}
+	var addedFile bool
+	for _, c := range h.fakeDC.Calls() {
+		if strings.HasPrefix(c, "add torrentfile="+hash) {
+			addedFile = true
+		}
+	}
+	if !addedFile {
+		t.Errorf("deferred .torrent not added directly: %v", h.fakeDC.Calls())
+	}
+
+	// Unknown key (e.g. after a restart): 410 rather than a bad magnet.
+	resp, err = client.Get(h.server.URL + "/stremio/play/d-unknown?deferred=1")
+	if err != nil {
+		t.Fatalf("play unknown: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusGone {
+		t.Errorf("unknown key status = %d, want 410", resp.StatusCode)
+	}
+}

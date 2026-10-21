@@ -75,9 +75,11 @@ type Settings struct {
 // searcher is the slice of *prowlarr.Client the grabber depends on. It fans
 // out one request per indexer (SearchEach) so a slow or failing indexer
 // can't blank the whole cycle and every indexer's recent releases are
-// represented.
+// represented. Fetch resolves a grabbed release whose .torrent download
+// Search deferred (prowlarr.Result.NeedsFetch).
 type searcher interface {
 	SearchEach(ctx context.Context, query, searchType string, categories, indexerIDs []int, budget time.Duration) ([]prowlarr.Result, error)
+	Fetch(ctx context.Context, r prowlarr.Result) (prowlarr.Result, error)
 }
 
 // downloadAdder is the slice of *torrents.Service used to add a grabbed
@@ -188,7 +190,8 @@ func (g *Grabber) Poll(ctx context.Context) error {
 	// each indexer, reusing all the normalization/magnet-synthesis in the
 	// existing client. SearchEach fans out per indexer so a slow/failing one
 	// can't blank the cycle.
-	results, err := g.newSearcher(s.ProwlarrURL, s.ProwlarrAPIKey).
+	search := g.newSearcher(s.ProwlarrURL, s.ProwlarrAPIKey)
+	results, err := search.
 		SearchEach(ctx, "", "search", s.Categories, s.IndexerIDs, s.SearchTimeout)
 	if err != nil {
 		return fmt.Errorf("rss: fetch recent releases: %w", err)
@@ -244,6 +247,18 @@ func (g *Grabber) Poll(ctx context.Context) error {
 
 	added := 0
 	for _, r := range grabs {
+		if r.NeedsFetch() {
+			// Hash unknown until the .torrent is downloaded; fetch it only
+			// for the few releases actually grabbed.
+			if r, err = search.Fetch(ctx, r); err != nil {
+				g.logger.Warn("rss: .torrent fetch failed", "title", r.Title, "error", err)
+				continue
+			}
+			// The batched owned-lookup above couldn't see this hash.
+			if got, err := g.store.TorrentsByHashes(ctx, []string{r.InfoHash}); err != nil || len(got) > 0 {
+				continue // owned already, or unknown: fail closed
+			}
+		}
 		if _, err := g.svc.EnsureAdded(ctx, r.MagnetURL, r.TorrentFile, torrents.Selector{Indexer: r.Indexer}); err != nil {
 			g.logger.Warn("rss: grab failed", "title", r.Title, "hash", r.InfoHash, "error", err)
 			continue
@@ -384,9 +399,11 @@ func selectGrabs(results []prowlarr.Result, s Settings, used, total int64, have 
 			for cursors[gi] < len(grp) {
 				r := grp[cursors[gi]]
 				cursors[gi]++
-				if r.InfoHash == "" {
+				if r.InfoHash == "" && !r.NeedsFetch() {
 					continue // nothing to dedup/track on
 				}
+				// A deferred release's hash is unknown until Poll fetches
+				// its .torrent; Poll re-checks ownership then.
 				if have != nil && have(r.InfoHash) {
 					continue // already downloaded
 				}

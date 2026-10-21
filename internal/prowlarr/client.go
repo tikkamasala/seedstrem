@@ -20,23 +20,25 @@ import (
 
 const defaultTimeout = 30 * time.Second
 
-// Result is a normalized Prowlarr search release. Every Result returned
-// by Search has both a non-empty InfoHash and a usable MagnetURL (a bare
-// infohash is expanded into a magnet); releases with neither are dropped.
+// Result is a normalized Prowlarr search release. A Result returned by
+// Search has either a non-empty InfoHash and a usable MagnetURL (a bare
+// infohash is expanded into a magnet), or — for magnet-less releases whose
+// .torrent fetch was deferred — only a DownloadURL (see NeedsFetch).
+// Releases with none of these are dropped.
 type Result struct {
 	Title     string
 	InfoHash  string // lowercase hex
 	MagnetURL string
-	// TorrentFile holds the raw .torrent bytes when the release was
-	// resolved by downloading a .torrent (magnet-less indexers, typical of
-	// private trackers). Adding these directly skips qBittorrent's
+	// TorrentFile holds the raw .torrent bytes once a deferred release has
+	// been resolved by Fetch. Adding these directly skips qBittorrent's
 	// metadata fetch, which is unreliable for private-tracker peers. Nil
-	// when the release already had a magnet/infohash.
+	// for results straight out of Search.
 	TorrentFile []byte
-	// DownloadURL is the Prowlarr .torrent link, set only when the hash is
-	// known but MagnetURL has no trackers and the fetch was deferred to
-	// play time (see Search). It embeds the Prowlarr API key, so it must
-	// stay server-side.
+	// DownloadURL is the Prowlarr .torrent link, set when the .torrent
+	// fetch was deferred out of Search: either the hash is known but
+	// MagnetURL has no trackers, or the release had neither magnet nor
+	// hash (NeedsFetch). It embeds the Prowlarr API key, so it must stay
+	// server-side.
 	DownloadURL string
 	Size        int64
 	Seeders     int
@@ -46,6 +48,12 @@ type Result struct {
 	// against the user's ratio (indexer freeleech flag or a zero
 	// download-volume factor). Preferred during ranking.
 	Freeleech bool
+}
+
+// NeedsFetch reports whether r is a magnet-less, hash-less release whose
+// .torrent must be downloaded (Fetch) before it can be added.
+func (r Result) NeedsFetch() bool {
+	return r.InfoHash == "" && r.MagnetURL == "" && r.DownloadURL != ""
 }
 
 // Client talks to a Prowlarr instance.
@@ -162,32 +170,18 @@ func (c *Client) Search(ctx context.Context, query, searchType string, categorie
 			continue // usenet or unknown — not resolvable via qBittorrent
 		}
 		res := normalize(r)
-		if res.MagnetURL == "" && r.DownloadURL != "" {
-			// Some (typically private-tracker) indexers omit magnetUrl and
-			// infoHash and only publish a .torrent download link. Fetch it
-			// and derive the hash ourselves rather than dropping the
-			// release outright.
-			if hash, name, trackers, raw, err := c.FetchTorrent(ctx, r.DownloadURL); err == nil {
-				res.InfoHash = hash
-				if res.Title == "" {
-					res.Title = name
-				}
-				res.MagnetURL = SynthesizeMagnet(hash, res.Title, trackers)
-				// Keep the raw .torrent so the play flow can add it
-				// directly (skipping qBittorrent's unreliable metadata
-				// fetch); the magnet above is the fallback.
-				res.TorrentFile = raw
-			}
-		} else if !MagnetHasTrackers(res.MagnetURL) && r.DownloadURL != "" {
-			// The hash is known but the magnet carries no trackers
-			// (infoHash-only releases, typical of private trackers), so it
-			// would find no peers. Defer the .torrent fetch to play time:
-			// indexers rate-limit downloads (~2s each through Prowlarr),
-			// so fetching every result here blows the search budget.
+		if !MagnetHasTrackers(res.MagnetURL) && r.DownloadURL != "" {
+			// Either the release has no magnet/infohash at all (some
+			// private-tracker indexers only publish a .torrent link) or the
+			// hash is known but the magnet carries no trackers, so it would
+			// find no peers. Both need the .torrent, but never fetch it
+			// here: Prowlarr serializes an indexer's downloads (~4s each on
+			// TorrentLeech), so fetching every result blows the search
+			// budget. Defer it to play time (see Fetch).
 			res.DownloadURL = r.DownloadURL
 		}
-		if res.MagnetURL == "" {
-			continue // no magnet and no infohash — cannot resolve-on-play
+		if res.MagnetURL == "" && res.DownloadURL == "" {
+			continue // no magnet, infohash or .torrent link — cannot resolve-on-play
 		}
 		out = append(out, res)
 	}
@@ -314,6 +308,26 @@ func (c *Client) FetchTorrent(ctx context.Context, downloadURL string) (hash, na
 		return "", "", nil, nil, err
 	}
 	return hash, name, trackers, body, nil
+}
+
+// Fetch resolves a deferred release (see NeedsFetch) by downloading its
+// .torrent, filling InfoHash, a tracker-carrying MagnetURL and
+// TorrentFile. Results that already have a hash are returned unchanged.
+func (c *Client) Fetch(ctx context.Context, r Result) (Result, error) {
+	if !r.NeedsFetch() {
+		return r, nil
+	}
+	hash, name, trackers, raw, err := c.FetchTorrent(ctx, r.DownloadURL)
+	if err != nil {
+		return r, err
+	}
+	r.InfoHash = hash
+	if r.Title == "" {
+		r.Title = name
+	}
+	r.MagnetURL = SynthesizeMagnet(hash, r.Title, trackers)
+	r.TorrentFile = raw
+	return r, nil
 }
 
 // SynthesizeMagnet builds a magnet URI from an infohash, optional display

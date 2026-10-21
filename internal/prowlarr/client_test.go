@@ -56,10 +56,10 @@ func TestSearch(t *testing.T) {
 		t.Errorf("indexerIds params = %v, want [3 7]", gotIndexers)
 	}
 
-	// Kept: magnet result + infohash-only (synthesized magnet). Dropped:
-	// torrent-file-only (no magnet/infohash) and usenet.
-	if len(results) != 2 {
-		t.Fatalf("want 2 results, got %d: %+v", len(results), results)
+	// Kept: magnet result, infohash-only (synthesized magnet) and
+	// torrent-file-only (fetch deferred). Dropped: usenet.
+	if len(results) != 3 {
+		t.Fatalf("want 3 results, got %d: %+v", len(results), results)
 	}
 
 	if results[0].InfoHash != hexHash {
@@ -79,21 +79,31 @@ func TestSearch(t *testing.T) {
 	if len(second.Categories) != 1 || second.Categories[0] != 5040 {
 		t.Errorf("object categories not parsed: %v", second.Categories)
 	}
+
+	third := results[2]
+	if !third.NeedsFetch() || third.DownloadURL != "http://x/file.torrent" {
+		t.Errorf("torrent-file-only result should defer its fetch, got %+v", third)
+	}
 }
 
-func TestSearchTorrentFileFallback(t *testing.T) {
+// TestSearchDefersTorrentFile asserts that a magnet-less, hash-less
+// release is returned with its download link and no .torrent fetch during
+// search, and that Fetch later resolves it into a tracker-carrying magnet.
+func TestSearchDefersTorrentFile(t *testing.T) {
 	// Minimal valid bencoded .torrent with an announce tracker. The
 	// tracker must survive into the synthesized magnet — without it a
 	// private-tracker torrent has no peers.
 	const tracker = "http://tr.example/announce"
 	torrentBytes := []byte("d8:announce26:" + tracker + "4:infod4:name4:testee")
 
+	var fetches int
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/search", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`[{"title":"Torrent File Only","downloadUrl":"` + "http://" + r.Host + `/file.torrent` + `","size":30,"seeders":3,"protocol":"torrent"}]`))
 	})
 	mux.HandleFunc("/file.torrent", func(w http.ResponseWriter, r *http.Request) {
+		fetches++
 		if got := r.Header.Get("X-Api-Key"); got != "my-key" {
 			t.Errorf("torrent fetch X-Api-Key = %q, want my-key", got)
 		}
@@ -108,11 +118,21 @@ func TestSearchTorrentFileFallback(t *testing.T) {
 		t.Fatalf("search: %v", err)
 	}
 	if len(results) != 1 {
-		t.Fatalf("want 1 result recovered via torrent-file fallback, got %d: %+v", len(results), results)
+		t.Fatalf("want 1 deferred result, got %d: %+v", len(results), results)
 	}
-	r := results[0]
-	if r.InfoHash == "" {
-		t.Error("expected infohash derived from fetched .torrent file")
+	if fetches != 0 {
+		t.Errorf("search fetched the .torrent %d times, want 0", fetches)
+	}
+	if !results[0].NeedsFetch() {
+		t.Fatalf("result should need a fetch: %+v", results[0])
+	}
+
+	r, err := c.Fetch(context.Background(), results[0])
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if r.InfoHash == "" || len(r.TorrentFile) == 0 {
+		t.Errorf("fetch should fill infohash and raw .torrent: %+v", r)
 	}
 	if !strings.HasPrefix(r.MagnetURL, "magnet:?xt=urn:btih:"+r.InfoHash) {
 		t.Errorf("expected synthesized magnet, got %q", r.MagnetURL)

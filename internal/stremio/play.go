@@ -23,6 +23,19 @@ func (h *Handler) play(w http.ResponseWriter, r *http.Request) {
 	infohash := strings.ToLower(chi.URLParam(r, "infohash"))
 	magnet := r.URL.Query().Get("magnet")
 
+	// A release whose .torrent fetch was deferred out of search has no
+	// hash yet: the path carries a download-link key (see playKey). Fetch
+	// the .torrent now — only for the release actually played.
+	var torrentFile []byte
+	if r.URL.Query().Get("deferred") == "1" {
+		var ok bool
+		infohash, magnet, torrentFile, ok = h.fetchByKey(ctx, s, infohash)
+		if !ok {
+			http.Error(w, "stream expired, reload the stream list", http.StatusGone)
+			return
+		}
+	}
+
 	if magnet == "" {
 		http.Error(w, "missing magnet", http.StatusBadRequest)
 		return
@@ -55,7 +68,9 @@ func (h *Handler) play(w http.ResponseWriter, r *http.Request) {
 	// If we cached the raw .torrent for this infohash while building the
 	// stream list, add it directly (skips qBittorrent's metadata fetch);
 	// otherwise fall back to the magnet.
-	torrentFile := h.torrentFiles.get(infohash)
+	if torrentFile == nil {
+		torrentFile = h.torrentFiles.get(infohash)
+	}
 	if torrentFile == nil && !prowlarr.MagnetHasTrackers(magnet) {
 		magnet, torrentFile = h.fetchDeferredTorrent(ctx, s, infohash, magnet)
 	}
@@ -102,4 +117,23 @@ func (h *Handler) fetchDeferredTorrent(ctx context.Context, s Settings, infohash
 	}
 	h.torrentFiles.put(infohash, raw)
 	return prowlarr.SynthesizeMagnet(hash, name, trackers), raw
+}
+
+// fetchByKey downloads the .torrent stashed under a deferred play key and
+// returns its infohash, a magnet carrying its trackers, and the raw bytes.
+// ok is false when the key is unknown (e.g. after a restart or past the
+// cache TTL) or the fetch fails.
+func (h *Handler) fetchByKey(ctx context.Context, s Settings, key string) (infohash, magnet string, raw []byte, ok bool) {
+	u := h.downloadURLs.get(key)
+	if u == nil {
+		h.logger.Warn("stremio: deferred play key unknown", "key", key)
+		return "", "", nil, false
+	}
+	res, err := h.prowlarr(s).Fetch(ctx, prowlarr.Result{DownloadURL: string(u)})
+	if err != nil {
+		h.logger.Warn("stremio: deferred .torrent fetch failed", "key", key, "error", err)
+		return "", "", nil, false
+	}
+	h.torrentFiles.put(res.InfoHash, res.TorrentFile)
+	return res.InfoHash, res.MagnetURL, res.TorrentFile, true
 }

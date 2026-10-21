@@ -2,6 +2,8 @@ package stremio
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -124,7 +126,9 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 	// annotation.
 	hashes := make([]string, 0, len(results)+len(owned))
 	for _, res := range results {
-		hashes = append(hashes, res.InfoHash)
+		if res.InfoHash != "" {
+			hashes = append(hashes, res.InfoHash)
+		}
 	}
 	for _, t := range owned {
 		hashes = append(hashes, t.Hash)
@@ -138,7 +142,9 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 	// handled above.
 	resultHashes := make([]string, 0, len(results))
 	for _, res := range results {
-		resultHashes = append(resultHashes, res.InfoHash)
+		if res.InfoHash != "" {
+			resultHashes = append(resultHashes, res.InfoHash)
+		}
 	}
 	cached := h.svc.StoredByHashes(ctx, resultHashes)
 
@@ -159,6 +165,11 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 	fresh := make([]prowlarr.Result, 0, len(results))
 	for _, res := range results {
 		lh := strings.ToLower(res.InfoHash)
+		if lh == "" {
+			// Deferred .torrent (no hash until play): can't be owned yet.
+			fresh = append(fresh, res)
+			continue
+		}
 		// Skip a Prowlarr result already surfaced as a content-owned entry.
 		if _, ok := ownedHashes[lh]; ok {
 			continue
@@ -180,17 +191,11 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 		items = append(items, r.item)
 	}
 	for _, res := range fresh {
-		// Stash any raw .torrent we already fetched (magnet-less
-		// releases) so the play handler can add it directly instead of a
-		// metadata-less magnet.
-		if len(res.TorrentFile) > 0 {
-			h.torrentFiles.put(res.InfoHash, res.TorrentFile)
-		}
-		// Likewise the deferred .torrent link of a tracker-less release,
-		// so play can fetch it (the link embeds the Prowlarr API key and
-		// must not go into the client-visible play URL).
+		// Stash the deferred .torrent link of a tracker-less or hash-less
+		// release so play can fetch it (the link embeds the Prowlarr API
+		// key and must not go into the client-visible play URL).
 		if res.DownloadURL != "" {
-			h.downloadURLs.put(res.InfoHash, []byte(res.DownloadURL))
+			h.downloadURLs.put(playKey(res), []byte(res.DownloadURL))
 		}
 		items = append(items, h.toStreamItem(s.ExternalURL, q, res, progress[res.InfoHash]))
 	}
@@ -548,7 +553,13 @@ func buildTextSearch(q meta.Query, title string, year int, p ProwlarrSettings) (
 func (h *Handler) toStreamItem(externalURL string, q meta.Query, res prowlarr.Result, progress float64) streamItem {
 	base := strings.TrimSuffix(externalURL, "/")
 	v := url.Values{}
-	v.Set("magnet", res.MagnetURL)
+	if res.NeedsFetch() {
+		// No magnet until play fetches the .torrent; the path key
+		// identifies the stashed download link instead of an infohash.
+		v.Set("deferred", "1")
+	} else {
+		v.Set("magnet", res.MagnetURL)
+	}
 	// Persist the content identity through play so later stream requests
 	// can surface this torrent as already-owned (see stream handler).
 	setContentIdentity(v, q)
@@ -556,7 +567,7 @@ func (h *Handler) toStreamItem(externalURL string, q meta.Query, res prowlarr.Re
 	if res.Indexer != "" {
 		v.Set("ix", res.Indexer)
 	}
-	playURL := fmt.Sprintf("%s/stremio/play/%s?%s", base, res.InfoHash, v.Encode())
+	playURL := fmt.Sprintf("%s/stremio/play/%s?%s", base, playKey(res), v.Encode())
 
 	// Surface the parsed resolution on the name's second line so Stremio's
 	// resolution badge and AIOStreams' grouping resolve cleanly.
@@ -600,6 +611,22 @@ func (h *Handler) toStreamItem(externalURL string, q meta.Query, res prowlarr.Re
 		BehaviorHints: hints,
 	}
 }
+
+// playKey is the /play path key for res: its infohash, or for a release
+// whose hash is unknown until its .torrent is fetched (NeedsFetch), a
+// stable digest of its download link. The digest keeps the link — which
+// embeds the Prowlarr API key — out of the client-visible URL.
+func playKey(res prowlarr.Result) string {
+	if !res.NeedsFetch() {
+		return res.InfoHash
+	}
+	sum := sha256.Sum256([]byte(res.DownloadURL))
+	return deferredKeyPrefix + hex.EncodeToString(sum[:20])
+}
+
+// deferredKeyPrefix marks a playKey that is a download-link digest rather
+// than an infohash, so the two can never collide.
+const deferredKeyPrefix = "d-"
 
 // setContentIdentity encodes the Stremio content identity into a play
 // URL's query so the resolve handler can persist what a torrent was added

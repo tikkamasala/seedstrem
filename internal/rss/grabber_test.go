@@ -221,6 +221,7 @@ type fakeSearcher struct {
 	results []prowlarr.Result
 	err     error
 	calls   int
+	fetched int
 	gotCats []int
 }
 
@@ -231,6 +232,17 @@ func (f *fakeSearcher) SearchEach(_ context.Context, query, searchType string, c
 		return nil, errors.New("expected empty query recent search")
 	}
 	return f.results, f.err
+}
+
+// Fetch resolves a deferred release to a fixed hash derived from its link.
+func (f *fakeSearcher) Fetch(_ context.Context, r prowlarr.Result) (prowlarr.Result, error) {
+	if !r.NeedsFetch() {
+		return r, nil
+	}
+	f.fetched++
+	r.InfoHash = strings.TrimPrefix(r.DownloadURL, "http://dl/")
+	r.MagnetURL = "magnet:?xt=urn:btih:" + r.InfoHash
+	return r, nil
 }
 
 type fakeAdder struct{ added []string }
@@ -321,6 +333,32 @@ func TestPollGrabsSelectedReleases(t *testing.T) {
 	}
 	if len(add.added) != 2 {
 		t.Fatalf("added %d; want 2 (%v)", len(add.added), add.added)
+	}
+}
+
+// TestPollFetchesDeferredReleases asserts that a hash-less release whose
+// .torrent Search deferred is fetched only once grabbed, and skipped when
+// the fetched hash turns out to be owned already.
+func TestPollFetchesDeferredReleases(t *testing.T) {
+	s := Settings{
+		Enabled: true, ProwlarrURL: "http://prowlarr", Categories: []int{5000}, MaxGrabsPerCycle: 2,
+	}
+	search := &fakeSearcher{results: []prowlarr.Result{
+		{Title: "New Release", DownloadURL: "http://dl/aaa", Seeders: 50, Size: 1 << 30, Indexer: "a"},
+		{Title: "Owned Release", DownloadURL: "http://dl/bbb", Seeders: 40, Size: 1 << 30, Indexer: "b"},
+	}}
+	add := &fakeAdder{}
+	own := &fakeOwner{owned: map[string]bool{"bbb": true}}
+	g := newGrabber(t, s, search, add, own)
+
+	if err := g.Poll(context.Background()); err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+	if search.fetched != 2 {
+		t.Errorf("fetched %d; want 2", search.fetched)
+	}
+	if len(add.added) != 1 || add.added[0] != "magnet:?xt=urn:btih:aaa" {
+		t.Errorf("added %v; want only the unowned release", add.added)
 	}
 }
 
