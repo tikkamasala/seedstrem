@@ -98,12 +98,15 @@ func (r *Resolver) FilePath(ctx context.Context, info downloader.TorrentInfo, fi
 	}
 
 	roots := mappingRoots(mappings)
+	var checked, outside []string
 	for _, c := range candidates {
 		if !withinAnyRoot(c, roots) {
 			// Candidate resolved outside every mapping root — skip it so
 			// a traversal can never be served even if it exists on disk.
+			outside = append(outside, c)
 			continue
 		}
+		checked = append(checked, c)
 		probes := []string{c}
 		if hints.IncompleteExt != "" {
 			probes = append(probes, c+hints.IncompleteExt)
@@ -114,8 +117,12 @@ func (r *Resolver) FilePath(ctx context.Context, info downloader.TorrentInfo, fi
 			}
 		}
 	}
+	if len(outside) > 0 {
+		return "", fmt.Errorf("file %q of torrent %s not found within a mapped root (checked %v; skipped %v as outside every mapping root %v — add a paths.mappings entry covering it): %w",
+			file.Name, info.Hash, checked, outside, roots, os.ErrNotExist)
+	}
 	return "", fmt.Errorf("file %q of torrent %s not found within a mapped root (checked %v): %w",
-		file.Name, info.Hash, candidates, os.ErrNotExist)
+		file.Name, info.Hash, checked, os.ErrNotExist)
 }
 
 // hasDotDot reports whether a slash-separated path contains a ".."
