@@ -3,6 +3,8 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
+  // Relative asset URLs so the UI also works behind a path prefix (e.g. /seedstrem/).
+  base: "./",
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {

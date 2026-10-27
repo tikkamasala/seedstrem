@@ -14,7 +14,8 @@ export class ApiError extends Error {
 export const SESSION_EXPIRED_EVENT = "seedstrem:session-expired";
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+  // Resolve relative to the page so a reverse-proxy path prefix is kept.
+  const res = await fetch(path.replace(/^\//, ""), {
     method,
     headers: {
       "X-Requested-With": "XMLHttpRequest",
