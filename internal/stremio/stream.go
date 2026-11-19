@@ -24,8 +24,7 @@ import (
 // streamItem is one entry in a Stremio stream response.
 type streamItem struct {
 	Name          string         `json:"name"`
-	Title         string         `json:"title"`                 // deprecated by Stremio; kept for back-compat
-	Description   string         `json:"description,omitempty"` // Stremio-preferred; AIOStreams reads it
+	Description   string         `json:"description,omitempty"` // never also send "title": stremio-core aliases it to description and rejects the duplicate
 	URL           string         `json:"url"`
 	BehaviorHints map[string]any `json:"behaviorHints,omitempty"`
 }
@@ -605,7 +604,6 @@ func (h *Handler) toStreamItem(externalURL string, q meta.Query, res prowlarr.Re
 	}
 	return streamItem{
 		Name:          name,
-		Title:         detail,
 		Description:   detail,
 		URL:           playURL,
 		BehaviorHints: hints,
@@ -693,7 +691,6 @@ func (h *Handler) toOwnedStreamItem(externalURL string, q meta.Query, tor store.
 	}
 	return streamItem{
 		Name:          name,
-		Title:         detail,
 		Description:   detail,
 		URL:           playURL,
 		BehaviorHints: hints,

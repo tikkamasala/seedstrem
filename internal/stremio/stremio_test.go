@@ -3,6 +3,7 @@ package stremio
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -379,10 +380,10 @@ func TestStreamSplitsSearchByCapability(t *testing.T) {
 	}
 	var sawID, sawText bool
 	for _, s := range sr.Streams {
-		if strings.Contains(s.Title, "ID Search Hit") {
+		if strings.Contains(s.Description, "ID Search Hit") {
 			sawID = true
 		}
-		if strings.Contains(s.Title, "Text Search Hit") {
+		if strings.Contains(s.Description, "Text Search Hit") {
 			sawText = true
 		}
 	}
@@ -465,8 +466,8 @@ func TestStreamReturnsPartialResultsWithinSearchTimeout(t *testing.T) {
 	if len(sr.Streams) != 1 {
 		t.Fatalf("want 1 partial result (fast indexer only), got %d: %+v", len(sr.Streams), sr.Streams)
 	}
-	if !strings.Contains(sr.Streams[0].Title, "Fast Indexer Hit") {
-		t.Errorf("expected the fast indexer's result, got %q", sr.Streams[0].Title)
+	if !strings.Contains(sr.Streams[0].Description, "Fast Indexer Hit") {
+		t.Errorf("expected the fast indexer's result, got %q", sr.Streams[0].Description)
 	}
 }
 
@@ -573,7 +574,7 @@ func TestStreamTmdbOnlyFallsBackToText(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(sr.Streams) != 1 || !strings.Contains(sr.Streams[0].Title, "Text Fallback Hit") {
+	if len(sr.Streams) != 1 || !strings.Contains(sr.Streams[0].Description, "Text Fallback Hit") {
 		t.Fatalf("want text-fallback result for tmdb-only indexer, got: %+v", sr.Streams)
 	}
 }
@@ -717,7 +718,7 @@ func TestStreamSurfacesSeasonPacks(t *testing.T) {
 
 	var titles []string
 	for _, s := range sr.Streams {
-		titles = append(titles, s.Title)
+		titles = append(titles, s.Description)
 	}
 	joined := strings.Join(titles, "\n")
 	if !strings.Contains(joined, "The Show S01E02") {
@@ -759,22 +760,39 @@ func TestStreamDiscovery(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	// stremio-core aliases "title" to "description" and rejects a stream
+	// carrying both as a duplicate field, dropping the whole response.
+	var raw struct {
+		Streams []map[string]any `json:"streams"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("decode raw: %v", err)
+	}
+	for i, s := range raw.Streams {
+		if _, ok := s["title"]; ok {
+			t.Errorf("stream %d carries a \"title\" key: %v", i, s)
+		}
+	}
 	var sr streamResponse
-	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
+	if err := json.Unmarshal(body, &sr); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(sr.Streams) != 2 {
 		t.Fatalf("want 2 streams, got %d: %+v", len(sr.Streams), sr.Streams)
 	}
 	// Highest seeders first.
-	if !strings.Contains(sr.Streams[0].Title, "42") {
-		t.Errorf("expected top stream to have 42 seeders: %q", sr.Streams[0].Title)
+	if !strings.Contains(sr.Streams[0].Description, "42") {
+		t.Errorf("expected top stream to have 42 seeders: %q", sr.Streams[0].Description)
 	}
 	if !strings.Contains(sr.Streams[0].URL, "/stremio/play/"+testHash) {
 		t.Errorf("play URL = %q", sr.Streams[0].URL)
 	}
 	// The parsed resolution is surfaced on the name badge (top result is
-	// "The Matrix 1999 1080p BluRay") and the description mirrors the title.
+	// "The Matrix 1999 1080p BluRay").
 	if !strings.Contains(sr.Streams[0].Name, "1080p") {
 		t.Errorf("expected resolution badge in name: %q", sr.Streams[0].Name)
 	}
@@ -782,9 +800,6 @@ func TestStreamDiscovery(t *testing.T) {
 	// visible even when clients truncate the description.
 	if !strings.Contains(sr.Streams[0].Name, "idx1") {
 		t.Errorf("expected indexer in name: %q", sr.Streams[0].Name)
-	}
-	if sr.Streams[0].Description != sr.Streams[0].Title {
-		t.Errorf("description should mirror title: desc=%q title=%q", sr.Streams[0].Description, sr.Streams[0].Title)
 	}
 }
 
@@ -833,11 +848,11 @@ func TestStreamPrioritizesOwnedTorrents(t *testing.T) {
 		t.Fatalf("want 1 stream (owned only), got %d: %+v", len(sr.Streams), sr.Streams)
 	}
 	first := sr.Streams[0]
-	if !strings.Contains(first.Title, "⚡") || !strings.Contains(first.Title, "The Matrix (owned)") {
-		t.Errorf("first stream should be the owned high-priority entry, got %q", first.Title)
+	if !strings.Contains(first.Description, "⚡") || !strings.Contains(first.Description, "The Matrix (owned)") {
+		t.Errorf("first stream should be the owned high-priority entry, got %q", first.Description)
 	}
-	if !strings.Contains(first.Title, "downloaded") {
-		t.Errorf("owned entry should report download state, got %q", first.Title)
+	if !strings.Contains(first.Description, "downloaded") {
+		t.Errorf("owned entry should report download state, got %q", first.Description)
 	}
 	if !strings.Contains(first.URL, "/stremio/play/"+testHash) {
 		t.Errorf("owned play URL = %q", first.URL)

@@ -138,8 +138,8 @@ func TestStreamOwnedFastPathOffersCachedResults(t *testing.T) {
 	if len(sr.Streams) != 2 {
 		t.Fatalf("want 2 streams (owned + cached), got %d: %+v", len(sr.Streams), sr.Streams)
 	}
-	if !strings.Contains(sr.Streams[0].Title, "The Matrix (owned)") {
-		t.Errorf("first stream should be the owned entry, got %q", sr.Streams[0].Title)
+	if !strings.Contains(sr.Streams[0].Description, "The Matrix (owned)") {
+		t.Errorf("first stream should be the owned entry, got %q", sr.Streams[0].Description)
 	}
 	if !strings.Contains(sr.Streams[1].URL, "/stremio/play/ffffffffffffffffffffffffffffffffffffffff") {
 		t.Errorf("second stream should be the other cached result, got %q", sr.Streams[1].URL)
@@ -187,8 +187,8 @@ func TestStreamOwnedFastPathRefreshesColdCache(t *testing.T) {
 	for {
 		sr := get()
 		if len(sr.Streams) == 2 {
-			if !strings.Contains(sr.Streams[0].Title, "The Matrix (owned)") {
-				t.Errorf("first stream should be the owned entry, got %q", sr.Streams[0].Title)
+			if !strings.Contains(sr.Streams[0].Description, "The Matrix (owned)") {
+				t.Errorf("first stream should be the owned entry, got %q", sr.Streams[0].Description)
 			}
 			break
 		}
