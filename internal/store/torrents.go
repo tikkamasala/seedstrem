@@ -102,13 +102,41 @@ func (s *Store) TorrentsByContent(ctx context.Context, source, ref string, seaso
 	if ref == "" {
 		return nil, nil
 	}
-	rows, err := s.db.QueryContext(ctx,
+	torrents, err := s.queryTorrents(ctx,
 		`SELECT `+torrentCols+` FROM torrents
 		 WHERE content_source = ? AND content_ref = ? AND season = ? AND episode = ?
 		 ORDER BY added_at DESC, id`,
 		source, ref, season, episode)
 	if err != nil {
 		return nil, fmt.Errorf("torrents by content %s/%s: %w", source, ref, err)
+	}
+	return torrents, nil
+}
+
+// TorrentsBySeason returns torrents added for any episode of this series
+// season, newest-first. A season pack is stored under the episode it was
+// first played for, so this is how a later episode finds a pack the app
+// already has. A blank ref yields no rows, as in TorrentsByContent.
+func (s *Store) TorrentsBySeason(ctx context.Context, source, ref string, season int) ([]Torrent, error) {
+	if ref == "" {
+		return nil, nil
+	}
+	torrents, err := s.queryTorrents(ctx,
+		`SELECT `+torrentCols+` FROM torrents
+		 WHERE content_source = ? AND content_ref = ? AND season = ?
+		 ORDER BY added_at DESC, id`,
+		source, ref, season)
+	if err != nil {
+		return nil, fmt.Errorf("torrents by season %s/%s s%d: %w", source, ref, season, err)
+	}
+	return torrents, nil
+}
+
+// queryTorrents runs a SELECT of torrentCols and scans every row.
+func (s *Store) queryTorrents(ctx context.Context, query string, args ...any) ([]Torrent, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
 	}
 	defer rows.Close()
 

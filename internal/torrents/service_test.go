@@ -588,6 +588,53 @@ func TestErroredTorrentsNotOffered(t *testing.T) {
 	}
 }
 
+// A season pack stored under the episode it was first played for must be
+// found for another episode it contains, so the next episode is served
+// from it instead of triggering a fresh Prowlarr search.
+func TestOwnedPacksForEpisode(t *testing.T) {
+	svc, fakeDC, db := newService(t)
+	ctx := context.Background()
+
+	const (
+		packHash   = "1111111111111111111111111111111111111111"
+		singleHash = "2222222222222222222222222222222222222222"
+		goneHash   = "3333333333333333333333333333333333333333"
+	)
+	packFiles := []fake.File{
+		{Name: "Show.S01E01.1080p.mkv", Size: 500 << 20},
+		{Name: "Show.S01E02.1080p.mkv", Size: 500 << 20},
+		{Name: "Show.S01E03.1080p.mkv", Size: 500 << 20},
+	}
+	fakeDC.Put(&fake.Torrent{Hash: packHash, Files: packFiles})
+	fakeDC.Put(&fake.Torrent{Hash: singleHash, Files: []fake.File{{Name: "Show.S01E01.1080p.mkv", Size: 500 << 20}}})
+	fakeDC.Put(&fake.Torrent{Hash: goneHash, Files: packFiles})
+
+	for _, tor := range []store.Torrent{
+		{ID: "PACKAAAAAAAAA", Hash: packHash, Phase: store.PhaseSelected, AddedAt: 1, ContentSource: "tt", ContentRef: "tt1", Season: 1, Episode: 1},
+		{ID: "SINGLEAAAAAAA", Hash: singleHash, Phase: store.PhaseSelected, AddedAt: 2, ContentSource: "tt", ContentRef: "tt1", Season: 1, Episode: 1},
+		{ID: "GONEAAAAAAAAA", Hash: goneHash, Phase: store.PhaseSelected, AddedAt: 3, ContentSource: "tt", ContentRef: "tt1", Season: 1, Episode: 1, Error: "missing"},
+	} {
+		if err := db.InsertTorrent(ctx, tor); err != nil {
+			t.Fatalf("insert %s: %v", tor.ID, err)
+		}
+	}
+
+	got := svc.OwnedPacksForEpisode(ctx, "tt", "tt1", 1, 3)
+	if len(got) != 1 || got[0].Hash != packHash {
+		t.Errorf("E3: got %+v; want only the pack", got)
+	}
+
+	// The exact episode is OwnedForContent's, not returned again here.
+	if got := svc.OwnedPacksForEpisode(ctx, "tt", "tt1", 1, 1); len(got) != 0 {
+		t.Errorf("E1: got %+v; want none", got)
+	}
+
+	// An episode the pack does not contain.
+	if got := svc.OwnedPacksForEpisode(ctx, "tt", "tt1", 1, 9); len(got) != 0 {
+		t.Errorf("E9: got %+v; want none", got)
+	}
+}
+
 // With the next-episodes cap, a season pack downloads only the played
 // episode (boosted) and the following N episodes, skipping the rest even
 // in full-seed mode.

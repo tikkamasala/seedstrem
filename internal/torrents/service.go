@@ -518,6 +518,40 @@ func (s *Service) OwnedForContent(ctx context.Context, source, ref string, seaso
 	return playable(owned)
 }
 
+// OwnedPacksForEpisode returns torrents the app already added for another
+// episode of the same series season whose files include this episode —
+// i.e. season packs. A pack is stored under the episode it was first
+// played for, so OwnedForContent alone misses it for the next episode and
+// the stream request falls back to a slow Prowlarr search. Torrents whose
+// metadata is not available yet are skipped. Best-effort: any error yields
+// no rows rather than failing the stream request.
+func (s *Service) OwnedPacksForEpisode(ctx context.Context, source, ref string, season, episode int) []store.Torrent {
+	if s == nil || s.store == nil || season <= 0 {
+		return nil
+	}
+	tors, err := s.store.TorrentsBySeason(ctx, source, ref, season)
+	if err != nil {
+		s.logger.Warn("torrents: owned-packs lookup", "source", source, "ref", ref, "season", season, "error", err)
+		return nil
+	}
+	sel := Selector{IsSeries: true, Season: season, Episode: episode}
+	var packs []store.Torrent
+	for _, t := range playable(tors) {
+		// Rows for this exact episode are OwnedForContent's.
+		if t.Episode == episode {
+			continue
+		}
+		files, err := s.dc.Files(ctx, t.Hash)
+		if err != nil || len(files) == 0 {
+			continue
+		}
+		if _, err := PickFile(files, sel); err == nil {
+			packs = append(packs, t)
+		}
+	}
+	return packs
+}
+
 // playable drops torrents the syncer flagged as gone from the download
 // client: offering one as owned would promise instant playback of content
 // that no longer exists.

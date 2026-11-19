@@ -72,6 +72,10 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 	// (that network call was tripping the caller's fetch timeout, which
 	// canceled the request before any streams were returned).
 	owned := h.svc.OwnedForContent(ctx, q.Source, q.ID, q.Season, q.Episode)
+	if q.IsSeries() || q.IsAnime() {
+		// A season pack grabbed for an earlier episode serves this one too.
+		owned = append(owned, h.svc.OwnedPacksForEpisode(ctx, q.Source, q.ID, q.Season, q.Episode)...)
+	}
 
 	var results []prowlarr.Result
 	contentKey := contentCacheKey(s.Prowlarr.URL, q, s.Prowlarr.IndexerIDs)
