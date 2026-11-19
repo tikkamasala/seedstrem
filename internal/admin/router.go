@@ -25,6 +25,7 @@ import (
 	"github.com/kipsilabs/seedstrem/internal/qbit"
 	"github.com/kipsilabs/seedstrem/internal/store"
 	"github.com/kipsilabs/seedstrem/internal/torrents"
+	"github.com/kipsilabs/seedstrem/internal/updater"
 )
 
 const passwordMask = "••••••••"
@@ -43,6 +44,10 @@ type Handler struct {
 	// for tests; defaults to diskusage.Stat. Used only as the fallback
 	// when the download client cannot report its own free space.
 	diskUsage func(path string) (used, total int64, err error)
+
+	// updater and restart back the self-update endpoints; nil disables them.
+	updater *updater.Updater
+	restart func()
 }
 
 // New creates the admin handler. dc must be the swappable client so
@@ -54,6 +59,12 @@ func New(cm *config.Manager, st *store.Store, dc *downloader.Swappable, svc *tor
 		logger = slog.Default()
 	}
 	return &Handler{config: cm, store: st, dc: dc, svc: svc, newClient: newClient, logger: logger, version: version, diskUsage: diskusage.Stat}
+}
+
+// EnableUpdates turns on the self-update endpoints. restart is called
+// after a new binary is installed and must restart the process.
+func (h *Handler) EnableUpdates(u *updater.Updater, restart func()) {
+	h.updater, h.restart = u, restart
 }
 
 // Router returns the router to mount at /api.
@@ -76,6 +87,8 @@ func (h *Handler) Router() http.Handler {
 		r.Post("/config/test-prowlarr", h.testProwlarr)
 		r.Post("/config/prowlarr-indexers", h.prowlarrIndexers)
 		r.Get("/status", h.status)
+		r.Get("/update", h.checkUpdate)
+		r.Post("/update", h.applyUpdate)
 		r.Get("/torrents", h.torrents)
 		r.Get("/deletions", h.deletions)
 		r.Delete("/torrents/{id}", h.deleteTorrent)
@@ -601,6 +614,36 @@ func (h *Handler) diskInfo(ctx context.Context, cfg config.Config, used int64) m
 	disk["free"] = total - localUsed
 	disk["free_source"] = "local"
 	return disk
+}
+
+func (h *Handler) checkUpdate(w http.ResponseWriter, r *http.Request) {
+	if h.updater == nil {
+		writeJSON(w, http.StatusOK, updater.Info{Current: h.version, Reason: "self-update is disabled"})
+		return
+	}
+	info, err := h.updater.Check(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
+// applyUpdate installs the newest build, answers, then restarts.
+func (h *Handler) applyUpdate(w http.ResponseWriter, r *http.Request) {
+	if h.updater == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "self-update is disabled"})
+		return
+	}
+	version, err := h.updater.Apply(r.Context())
+	if err != nil {
+		h.logger.Warn("self-update failed", "error", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	h.logger.Info("self-update installed, restarting", "from", h.version, "to", version)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": version})
+	h.restart()
 }
 
 func (h *Handler) status(w http.ResponseWriter, r *http.Request) {

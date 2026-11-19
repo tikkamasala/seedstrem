@@ -31,18 +31,29 @@ import (
 	"github.com/kipsilabs/seedstrem/internal/stremio"
 	"github.com/kipsilabs/seedstrem/internal/syncer"
 	"github.com/kipsilabs/seedstrem/internal/torrents"
+	"github.com/kipsilabs/seedstrem/internal/updater"
 )
 
 var version = "dev"
 
+// errRestart is returned by run after a graceful shutdown requested by
+// the self-updater; main then execs the (new) binary in place.
+var errRestart = errors.New("restart requested")
+
 func main() {
-	if err := run(); err != nil {
+	upd := updater.New(version)
+	err := run(upd)
+	if errors.Is(err, errRestart) {
+		// Same PID, so a systemd unit keeps tracking the process.
+		err = syscall.Exec(upd.Exe, os.Args, os.Environ())
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "seedstrem:", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(upd *updater.Updater) error {
 	configPath := flag.String("config", defaultConfigPath(), "path to config.yaml")
 	healthcheck := flag.Bool("healthcheck", false, "probe the local /api/health endpoint and exit (for Docker HEALTHCHECK)")
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -145,6 +156,13 @@ func run() error {
 	}, logger)
 
 	adminHandler := admin.New(cm, db, dc, torrentSvc, buildDownloadClient, version, logger)
+	restartCh := make(chan struct{}, 1)
+	adminHandler.EnableUpdates(upd, func() {
+		select {
+		case restartCh <- struct{}{}:
+		default:
+		}
+	})
 
 	syncCtx, stopSync := context.WithCancel(context.Background())
 	defer stopSync()
@@ -222,16 +240,28 @@ func run() error {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
+	restart := false
 	select {
 	case err := <-errCh:
 		return err
 	case sig := <-quit:
 		logger.Info("shutting down", "signal", sig.String())
+	case <-restartCh:
+		restart = true
+		logger.Info("restarting into the updated binary")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	return httpServer.Shutdown(ctx)
+	err = httpServer.Shutdown(ctx)
+	if restart {
+		// Long-lived streams may outlast the timeout; restart regardless.
+		if err != nil {
+			logger.Warn("graceful shutdown incomplete before restart", "error", err)
+		}
+		return errRestart
+	}
+	return err
 }
 
 // buildDownloadClient constructs the download client selected by
