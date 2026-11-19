@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
 
 concurrency:
@@ -54,3 +55,64 @@ jobs:
         run: go test -race -coverprofile=coverage.out ./...
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1
+
+  # Linux binaries for the seedbox self-updater. Only pushes (main or a
+  # v* tag) build, and only after the tests pass.
+  build:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: [web, test]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # git describe needs the tags
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+      - name: Build linux binaries
+        run: |
+          version=$(git describe --tags --always)
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath \
+              -ldflags "-s -w -X main.version=$version" \
+              -o dist/seedstrem_linux_$arch ./cmd/seedstrem
+          done
+          echo "$version" > dist/version.txt
+          (cd dist && sha256sum seedstrem_linux_* > checksums.txt)
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: dist/*
+          if-no-files-found: error
+
+  # main refreshes the rolling "edge" pre-release (what the in-app
+  # updater installs); a v* tag publishes a normal release.
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: dist
+      - name: Publish edge
+        if: github.ref == 'refs/heads/main'
+        run: |
+          gh release delete edge --cleanup-tag -y || true
+          gh release create edge dist/* --prerelease --target "$GITHUB_SHA" \
+            --title "edge (main @ ${GITHUB_SHA::7})" \
+            --notes "Rolling build of main at $GITHUB_SHA ($(cat dist/version.txt))."
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes
