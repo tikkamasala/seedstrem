@@ -52,6 +52,9 @@ var (
 	reDashNum = regexp.MustCompile(`[\s._-]-[\s._-]*0*(\d{1,4})(?:[\s._-]|$)`)
 	// [05] bracketed absolute numbering
 	reBracketNum = regexp.MustCompile(`\[0*(\d{1,4})\]`)
+	// "Show.001.Title" dot/space-delimited absolute numbering; 2-3 digits
+	// so audio channels (5.1), years and resolutions don't match
+	reDotNum = regexp.MustCompile(`[\s._](\d{2,3})[\s._]`)
 )
 
 // IsVideo reports whether name has a known video extension.
@@ -93,6 +96,11 @@ func matchEpisode(name string, season, episode int) bool {
 			return e == episode
 		}
 		if m := reBracketNum.FindStringSubmatch(name); m != nil {
+			e, _ := strconv.Atoi(m[1])
+			return e == episode
+		}
+		// Basename only: a release folder must not supply the number.
+		if m := reDotNum.FindStringSubmatch(path.Base(name)); m != nil {
 			e, _ := strconv.Atoi(m[1])
 			return e == episode
 		}

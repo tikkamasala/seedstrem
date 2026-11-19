@@ -28,6 +28,9 @@ func TestMatchEpisode(t *testing.T) {
 		{"no match", "Random.Movie.2021.1080p.mkv", 1, 5, false},
 		{"zero episode invalid", "Show.S01E00.mkv", 1, 0, false},
 		{"padded episode", "Show.S01E005.mkv", 1, 5, true},
+		{"dotted absolute in season pack", "Dragon.Ball.Z.S01.1080p.MULTi.BluRay.x264-GRP/Dragon.Ball.Z.001.Un mystérieux guerrier.mkv", 1, 1, true},
+		{"dotted absolute wrong ep", "Dragon.Ball.Z.S01.1080p.MULTi.BluRay.x264-GRP/Dragon.Ball.Z.002.Le passé.mkv", 1, 1, false},
+		{"dotted absolute ignores audio channels", "Show.DDP5.1.mkv", 1, 1, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
