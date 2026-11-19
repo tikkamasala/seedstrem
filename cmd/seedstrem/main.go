@@ -73,6 +73,8 @@ func run(upd *updater.Updater) error {
 		return probeHealth(cfg.Server.Listen)
 	}
 
+	upd.Repo = cfg.Update.Repo
+
 	logger := newLogger(cfg.Log.Level)
 	slog.SetDefault(logger)
 

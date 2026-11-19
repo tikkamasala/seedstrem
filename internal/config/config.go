@@ -36,6 +36,7 @@ type Config struct {
 	Seeding     Seeding     `yaml:"seeding"`
 	RSS         RSS         `yaml:"rss"`
 	Log         Log         `yaml:"log"`
+	Update      Update      `yaml:"update"`
 }
 
 type Server struct {
@@ -329,6 +330,13 @@ type Log struct {
 	Level string `yaml:"level"`
 }
 
+// Update configures the in-app self-updater.
+type Update struct {
+	// Repo is the GitHub repository whose "edge" release is installed:
+	// owner/name or https://github.com/owner/name.
+	Repo string `yaml:"repo"`
+}
+
 // Default returns the configuration used when no file or overrides exist.
 func Default() Config {
 	return Config{
@@ -391,7 +399,8 @@ func Default() Config {
 			MaxGrabsPerCycle: 5,
 			FreeleechOnly:    false,
 		},
-		Log: Log{Level: "info"},
+		Log:    Log{Level: "info"},
+		Update: Update{Repo: "tikkamasala/seedstrem"},
 	}
 }
 
@@ -462,6 +471,7 @@ func applyEnv(cfg *Config, getenv func(string) string) {
 	set("META_TMDB_API_KEY", &cfg.Meta.TMDbAPIKey)
 	set("STORAGE_DATABASE", &cfg.Storage.Database)
 	set("LOG_LEVEL", &cfg.Log.Level)
+	set("UPDATE_REPO", &cfg.Update.Repo)
 
 	if v := getenv("SEEDSTREM_STREAM_WAIT_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {

@@ -35,7 +35,7 @@ type Info struct {
 
 // Updater checks for and installs new builds.
 type Updater struct {
-	Repo    string // owner/name
+	Repo    string // owner/name or https://github.com/owner/name
 	Tag     string // release tag to track
 	APIBase string
 	Current string // running version
@@ -59,7 +59,6 @@ func New(current string) *Updater {
 		}
 	}
 	return &Updater{
-		Repo:    "tikkamasala/seedstrem",
 		Tag:     "edge",
 		APIBase: "https://api.github.com",
 		Current: current,
@@ -75,6 +74,9 @@ func (u *Updater) unsupported() string {
 	}
 	if u.Exe == "" {
 		return "cannot locate the running binary"
+	}
+	if u.repo() == "" {
+		return "update.repo is not set in the config"
 	}
 	f, err := os.CreateTemp(filepath.Dir(u.Exe), ".seedstrem-probe-*")
 	if err != nil {
@@ -168,6 +170,13 @@ func (u *Updater) Apply(ctx context.Context) (string, error) {
 	return latest, nil
 }
 
+// repo returns Repo as owner/name, accepting a full GitHub URL.
+func (u *Updater) repo() string {
+	r := strings.TrimPrefix(strings.TrimSpace(u.Repo), "https://")
+	r = strings.TrimPrefix(r, "github.com/")
+	return strings.TrimSuffix(strings.TrimSuffix(r, "/"), ".git")
+}
+
 type release struct {
 	Assets []struct {
 		Name string `json:"name"`
@@ -186,7 +195,7 @@ func (r release) asset(name string) (string, bool) {
 
 func (u *Updater) release(ctx context.Context) (release, error) {
 	var rel release
-	body, err := u.get(ctx, fmt.Sprintf("%s/repos/%s/releases/tags/%s", u.APIBase, u.Repo, u.Tag))
+	body, err := u.get(ctx, fmt.Sprintf("%s/repos/%s/releases/tags/%s", u.APIBase, u.repo(), u.Tag))
 	if err != nil {
 		return rel, err
 	}

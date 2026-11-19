@@ -213,3 +213,9 @@ rss:
 
 log:
   level: "info" # debug | info | warn | error
+
+update:
+  # GitHub repo the sidebar "Update" button installs from (its rolling
+  # "edge" release, rebuilt by CI on every push to main). owner/name or a
+  # full https://github.com/owner/name URL. Restart to apply a change.
+  repo: "tikkamasala/seedstrem"

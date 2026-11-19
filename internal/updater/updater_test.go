@@ -117,3 +117,11 @@ func TestUnwritableDirUnsupported(t *testing.T) {
 		t.Fatalf("got %+v, %v", info, err)
 	}
 }
+
+func TestRepoAcceptsURL(t *testing.T) {
+	for _, in := range []string{"o/r", "https://github.com/o/r", "github.com/o/r/", "https://github.com/o/r.git"} {
+		if got := (&Updater{Repo: in}).repo(); got != "o/r" {
+			t.Errorf("%q -> %q", in, got)
+		}
+	}
+}
