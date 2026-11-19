@@ -1,5 +1,8 @@
+import { useEffect, useState } from "react";
 import { ThemeName } from "../lib/theme";
-import type { Status } from "../api";
+import { api, type Status, type UpdateInfo } from "../api";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { useToast } from "./Toast";
 import { NavItem } from "./NavItem";
 import { Icon } from "./Icon";
 import mark from "../assets/mark.png";
@@ -74,6 +77,7 @@ export function Sidebar({
           <Icon name="logout" className="opacity-80" />
           Log out
         </button>
+        <UpdateButton />
         {status?.version && (
           <span className="px-3 pt-1 text-xs opacity-40">seedstrem {status.version}</span>
         )}
@@ -113,5 +117,68 @@ function HealthLine({ name, connected, stale, version }: HealthLineProps) {
         )}
       </span>
     </div>
+  );
+}
+
+// Offers the newest build from GitHub when one is published. Installing it
+// restarts the server; we wait for the new version to answer, then reload.
+function UpdateButton() {
+  const toast = useToast();
+  const [info, setInfo] = useState<UpdateInfo | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.updateInfo().then(setInfo, () => {});
+  }, []);
+
+  if (!info?.supported || !info.available) return null;
+
+  async function apply() {
+    setBusy(true);
+    try {
+      const { version } = await api.applyUpdate();
+      toast.info(`Installed ${version}, restarting…`);
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        try {
+          if ((await api.status()).version === version) {
+            location.reload();
+            return;
+          }
+        } catch {
+          /* server restarting */
+        }
+      }
+      toast.error("seedstrem did not come back; check the service logs");
+    } catch (e) {
+      toast.error(`Update failed: ${(e as Error).message}`);
+    }
+    setBusy(false);
+    setConfirming(false);
+  }
+
+  return (
+    <>
+      <button
+        className="flex items-center gap-3 rounded-field px-3 py-2 text-sm font-medium text-accent transition-colors hover:bg-accent/10"
+        onClick={() => setConfirming(true)}
+        disabled={busy}
+      >
+        <Icon name="download" className="opacity-80" />
+        <span className="truncate">Update to {info.latest}</span>
+      </button>
+      <ConfirmDialog
+        open={confirming}
+        title="Update seedstrem?"
+        confirmLabel={busy ? "Updating…" : "Update & restart"}
+        busy={busy}
+        onConfirm={apply}
+        onCancel={() => setConfirming(false)}
+      >
+        Installs {info.latest} (running {info.current}) and restarts seedstrem. Active streams
+        will drop for a few seconds.
+      </ConfirmDialog>
+    </>
   );
 }

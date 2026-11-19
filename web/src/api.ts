@@ -209,6 +209,15 @@ export interface Deletion {
   files_deleted: boolean;
 }
 
+// Self-update state from GET /api/update (newest build on the "edge" release).
+export interface UpdateInfo {
+  supported: boolean;
+  reason?: string;
+  current: string;
+  latest?: string;
+  available: boolean;
+}
+
 export const api = {
   login: (password: string) => request<void>("POST", "/api/session", { password }),
   logout: () => request<void>("DELETE", "/api/session"),
@@ -250,6 +259,8 @@ export const api = {
       { url, api_key: apiKey },
     ),
   status: () => request<Status>("GET", "/api/status"),
+  updateInfo: () => request<UpdateInfo>("GET", "/api/update"),
+  applyUpdate: () => request<{ ok: boolean; version: string }>("POST", "/api/update"),
   torrents: () => request<Torrent[]>("GET", "/api/torrents"),
   deletions: () => request<Deletion[]>("GET", "/api/deletions"),
   deleteTorrent: (id: string) =>
